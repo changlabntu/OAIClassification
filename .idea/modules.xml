@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/knee_classification.iml" filepath="$PROJECT_DIR$/.idea/knee_classification.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/OAI_classification.iml" filepath="$PROJECT_DIR$/.idea/OAI_classification.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/knee_segmentation.iml" filepath="$PROJECT_DIR$/.idea/knee_segmentation.iml" />
     </modules>
   </component>

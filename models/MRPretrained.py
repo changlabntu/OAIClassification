@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 import numpy as np
-
+import copy
 
 def print_num_of_parameters(net):
     model_parameters = filter(lambda p: p.requires_grad, net.parameters())
@@ -65,48 +65,69 @@ class PainNet0(nn.Module):
 
 
 class ResnetFeatures(nn.Module):
-    def __init__(self, resnet_name, pretrained):
+    def __init__(self, resnet_name, pretrained, fmap_c):
         super(ResnetFeatures, self).__init__()
         self.resnet = getattr(models, resnet_name)(pretrained=pretrained)
         self.resnet.avgpool = nn.Identity()
         self.resnet.fc = nn.Identity()
+        self.fmap_c = fmap_c
 
         to_freeze(list(self.resnet.parameters()))
-        pars = append_parameters([getattr(self.resnet, x) for x in ['layer4']])
-        to_unfreeze(pars)
+        #pars = append_parameters([getattr(self.resnet, x)[-1] for x in ['layer4']])
+        #to_unfreeze(pars)
 
         print_num_of_parameters(self.resnet)
 
     def forward(self, x):
         x = self.resnet(x)
-        x = x.view(x.shape[0], 512, 7, 7)
+        x = x.view(x.shape[0], self.fmap_c, 8, 8)
         return x
 
 
 class MRPretrained(nn.Module):
     def __init__(self, args_m):
         super(MRPretrained, self).__init__()
-        if args_m.backbone == 'pain':
-            self.features = PainNet0().features
-        elif args_m.backbone.startswith('res'):
-            self.features = ResnetFeatures(args_m.backbone, pretrained=args_m.pretrained)
-        elif args_m.backbone == 'SqueezeNet':
-            self.features = getattr(models, args_m.backbone)().features
-        else:
-            self.features = getattr(models, args_m.backbone)(pretrained=args_m.pretrained).features
+
+        self.args_m = args_m
 
         if args_m.backbone == 'alexnet':
             self.fmap_c = 256
-        elif args_m.backbone == 'densenet121':
+        elif args_m.backbone in ['densenet121']:
             self.fmap_c = 1024
+        elif args_m.backbone in ['resnet50', 'resnet101']:
+            self.fmap_c = 2048
         else:
             self.fmap_c = 512
 
+        self.features = self.get_encoder(args_m)
+
         # fusion part
+        self.simple0 = nn.Conv2d(self.fmap_c, 1, 1, 1, 0)
+
+        self.simplel = nn.Conv2d(self.fmap_c, 2, 1, 1, 0)
+        self.simplem = nn.Conv2d(self.fmap_c, 2, 1, 1, 0)
+
+        self.simplel2 = nn.Conv2d(self.fmap_c * 2, 2, 1, 1, 0)
+        self.simplem2 = nn.Conv2d(self.fmap_c * 2, 2, 1, 1, 0)
+
+        self.simple1 = nn.Conv2d(2, args_m.n_classes, 1, 1, 0)
+
         self.classifier = nn.Conv2d(self.fmap_c, args_m.n_classes, 1, 1, 0)
         self.classifier_cat = nn.Conv2d(self.fmap_c * 23, args_m.n_classes, 1, 1, 0)
+        self.classifier_cat2 = nn.Conv2d(self.fmap_c * 23 * 2, args_m.n_classes, 1, 1, 0)
         self.avg = nn.AdaptiveAvgPool2d((1, 1))
         self.fuse = args_m.fuse
+
+    def get_encoder(self, args_m):
+        if args_m.backbone == 'pain':
+            eatures = PainNet0().features
+        elif args_m.backbone.startswith('resnet'):
+            features = ResnetFeatures(args_m.backbone, pretrained=args_m.pretrained, fmap_c=self.fmap_c)
+        elif args_m.backbone == 'SqueezeNet':
+            features = getattr(models, args_m.backbone)().features
+        else:
+            features = getattr(models, args_m.backbone)(pretrained=args_m.pretrained).features
+        return features
 
     def forward(self, x):   # (B, 3, 224, 224, 23)
         # dummies
@@ -134,3 +155,7 @@ class MRPretrained(nn.Module):
             out = out[:, :, 0, 0]
         return out, features
 
+
+if __name__ == '__main__':
+    net = ResnetFeatures('resnet101', pretrained=True, fmap_c=2048)
+    net(torch.rand(1, 3, 256, 256))

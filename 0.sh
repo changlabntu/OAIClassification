@@ -1,0 +1,5 @@
+CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone alexnet --fuse max --prj separate_mri  --load3d --prj moaks/m --direction ap_bp --split 0 --dataset womac4 --lr 0.001
+CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone alexnet --fuse max --prj separate_mri  --load3d --prj moaks/m --direction ap_bp --split 1 --dataset womac4 --lr 0.001
+CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone alexnet --fuse max --prj separate_mri  --load3d --prj moaks/m --direction ap_bp --split 2 --dataset womac4 --lr 0.001
+CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone alexnet --fuse max --prj separate_mri  --load3d --prj moaks/m --direction ap_bp --split 3 --dataset womac4 --lr 0.001
+CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone alexnet --fuse max --prj separate_mri  --load3d --prj moaks/m --direction ap_bp --split 4 --dataset womac4 --lr 0.001

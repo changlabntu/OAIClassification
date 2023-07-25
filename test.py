@@ -12,11 +12,14 @@ import numpy as np
 load_dotenv('.env')
 
 # Model
-net = torch.load('checkpoints/20_0.88.pth')
+net = torch.load('checkpoints/20_0.84.pth')
 
 # Data
-from loaders.OAI_pain_loader import OAIUnilateralPainOld as OAIUnilateralPain
-eval_set = OAIUnilateralPain(index=range(213))
+from loaders.OAI_pain_loader import OAIFromFolder as OAIData
+source = ('/media/ExtHDD01/OAI/OAI_extracted/OAI00UniPain3/Npy/SAG_IW_TSE_LEFT_cropped/*',
+          '/media/ExtHDD01/OAI/OAI_extracted/OAI00UniPain3/Npy/SAG_IW_TSE_RIGHT_cropped/*')
+train_set = OAIData(index=range(213, 710), source=source, threshold=800)
+eval_set = OAIData(index=range(213), source=source, threshold=800)
 eval_loader = DataLoader(eval_set, batch_size=1, shuffle=False, num_workers=4, drop_last=False)
 
 # Forward
@@ -48,15 +51,11 @@ if 0:
     import matplotlib.pyplot as plt
     from sklearn import manifold, datasets
 
-    # X = np.load('all_images.npy')[:1000,:]
-    if 0:
-        X = np.concatenate([all_x0[:, :, 0, 0], all_x1[:, :, 0, 0]], 0)
-        y = np.concatenate([np.zeros(all_x0.shape[0]), np.ones(all_x1.shape[0])], 0).astype(np.uint8)
-
+    # different between two knees
     X = (all_x1 - all_x0)[:, :, 0, 0]
     y = all_label
-    pred = np.argmax(all_out, 1)
 
+    pred = np.argmax(all_out, 1)
     correct = (pred == y).astype(np.int8)
 
     n_samples, n_features = X.shape
