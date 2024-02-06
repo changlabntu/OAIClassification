@@ -120,7 +120,7 @@ class MRPretrained(nn.Module):
 
     def get_encoder(self, args_m):
         if args_m.backbone == 'pain':
-            eatures = PainNet0().features
+            features = PainNet0().features
         elif args_m.backbone.startswith('resnet'):
             features = ResnetFeatures(args_m.backbone, pretrained=args_m.pretrained, fmap_c=self.fmap_c)
         elif args_m.backbone == 'SqueezeNet':

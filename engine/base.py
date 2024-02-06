@@ -4,10 +4,21 @@ import numpy as np
 import torch.nn as nn
 import os
 import tifffile as tiff
-import torch.optim.lr_scheduler
+from torch.optim import lr_scheduler
 
 
-class LitClassification(pl.LightningModule):
+# from pytorch_lightning.utilities import rank_zero_only
+
+def lambda_rule(epoch):
+    # lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
+    n_epochs_decay = 50
+    n_epochs = 101
+    epoch_count = 0
+    lr_l = 1.0 - max(0, epoch + epoch_count - n_epochs) / float(n_epochs_decay + 1)
+    return lr_l
+
+
+class BaseModel(pl.LightningModule):
     def __init__(self, args, train_loader, eval_loader, net, loss_function, metrics):
         super().__init__()
 
@@ -15,8 +26,8 @@ class LitClassification(pl.LightningModule):
 
         # hyperparameters
         self.args = args
-        #self.hparams = args
-        hparams = {x:vars(args)[x] for x in vars(args).keys() if x not in args.not_tracking_hparams}
+        # self.hparams = args
+        hparams = {x: vars(args)[x] for x in vars(args).keys() if x not in args.not_tracking_hparams}
         hparams.pop('not_tracking_hparams', None)
         self.hparams.update(hparams)
         print(self.hparams)
@@ -56,7 +67,8 @@ class LitClassification(pl.LightningModule):
         optimizer = None
         scheduler = None
         if self.args.op == 'adams':
-            optimizer = torch.optim.Adam(self.net.parameters(), lr=self.learning_rate, weight_decay=self.args.weight_decay)
+            optimizer = torch.optim.Adam(self.net.parameters(), lr=self.learning_rate,
+                                         weight_decay=self.args.weight_decay)
         elif self.args.op == 'sgd':
             if self.args.legacy:
                 par_freeze = set(self.net.module.par_freeze)
@@ -67,11 +79,10 @@ class LitClassification(pl.LightningModule):
                                         momentum=0.9,
                                         weight_decay=self.args.weight_decay)
 
-            #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+            scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
+            # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+            # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
-        #if self.args['legacy']:
-        #    params = list(set(self.net.parameters()) - set(self.net.module.par_freeze))
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def on_train_start(self):
@@ -82,21 +93,12 @@ class LitClassification(pl.LightningModule):
         imgs = batch['img']
         labels = batch['labels']
 
-        if self.args.legacy:
-            imgs[0] = imgs[0].cuda()
-            imgs[1] = imgs[1].cuda()
-            labels[0] = labels[0].cuda()
-
         # repeat part
-        if len(imgs) == 2:
-            imgs[0] = imgs[0].repeat(1, 3, 1, 1, 1)
-            imgs[1] = imgs[1].repeat(1, 3, 1, 1, 1)
-        elif len(imgs) == 4:
-            imgs = (torch.cat([imgs[1], imgs[0], imgs[0]], 1), torch.cat([imgs[3], imgs[2], imgs[2]], 1))
-        elif len(imgs) == 6:
-            imgs = (torch.cat([imgs[0], imgs[1], imgs[2]], 1), torch.cat([imgs[3], imgs[4], imgs[5]], 1))
+        imgs[0] = imgs[0].repeat(1, 3, 1, 1, 1)
+        imgs[1] = imgs[1].repeat(1, 3, 1, 1, 1)
 
-        output = self.net(imgs)
+        output, _ = self.net(torch.cat(imgs, 0))
+        labels = torch.cat([labels, 1 - labels]).type(torch.long).cuda()
 
         loss, _ = self.loss_function(output, labels)
 
@@ -106,74 +108,83 @@ class LitClassification(pl.LightningModule):
 
         return loss
 
+    # @rank_zero_only
     def validation_step(self, batch, batch_idx=0):
-        imgs = batch['img']
-        labels = batch['labels']
+        if 1:#self.trainer.global_rank == 0:
+            imgs = batch['img']
+            labels = batch['labels']
 
-        if self.args.legacy:
-            imgs[0] = imgs[0].cuda()
-            imgs[1] = imgs[1].cuda()
-            labels[0] = labels[0].cuda()
-
-        # repeat part
-        if len(imgs) == 2:
+            # repeat part
             imgs[0] = imgs[0].repeat(1, 3, 1, 1, 1)
             imgs[1] = imgs[1].repeat(1, 3, 1, 1, 1)
-        elif len(imgs) == 4:
-            imgs = (torch.cat([imgs[1], imgs[0], imgs[0]], 1), torch.cat([imgs[3], imgs[2], imgs[2]], 1))
-        elif len(imgs) == 6:
-            imgs = (torch.cat([imgs[0], imgs[1], imgs[2]], 1), torch.cat([imgs[3], imgs[4], imgs[5]], 1))
 
-        output = self.net(imgs)
+            imgs = torch.cat(imgs, 0)
+            output, _ = self.net(imgs)
+            #print(labels)
+            #labels = torch.cat([torch.zeros(labels.shape), torch.ones(labels.shape)]).type(torch.long).cuda()
+            #print(labels)
+            labels = torch.cat([labels, 1 - labels]).type(torch.long).cuda()
 
-        loss, _ = self.loss_function(output, labels)
-        if not self.args.legacy:
-            self.log('val_loss', loss, on_step=False, on_epoch=True,
-                     prog_bar=True, logger=True, sync_dist=True)
+            loss, _ = self.loss_function(output, labels)
+            if not self.args.legacy:
+                self.log('val_loss', loss, on_step=False, on_epoch=True,
+                         prog_bar=True, logger=True, sync_dist=True)
 
-        # metrics
-        self.all_label.append(labels[0].cpu())
-        self.all_out.append(output[0].cpu().detach())
-        self.all_loss.append(loss.detach().cpu().numpy())
+            # metrics
+            self.all_label.append(labels.cpu())
+            self.all_out.append(output.cpu().detach())
+            self.all_loss.append(loss.detach().cpu().numpy())
 
-        return loss
-
-    def validation_epoch_end(self, x):
-        all_out = torch.cat(self.all_out, 0)
-        all_label = torch.cat(self.all_label, 0)
-        metrics = self.get_metrics(all_label, all_out)
-
-        auc = torch.from_numpy(np.array(metrics)).cuda()
-        if not self.args.legacy:
-            for i in range(len(auc)):
-                self.log('auc' + str(i), auc[i], on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        self.all_label = []
-        self.all_out = []
-        self.tini = time.time()
-
-        self.all_loss = np.mean(self.all_loss)
-        print(self.all_loss)
-
-        # saving checkpoints
-        if 0:
-            if (self.all_loss < self.best_loss) and (self.epoch >= 2):
-                self.best_loss = self.all_loss
-                print(self.best_loss)
-                if not self.args.legacy:
-                    self.log('best_auc', auc[0])
-                file_name = os.path.join('checkpoints', self.args.prj, (str(self.epoch) + '_{:.3f}.pth').format(metrics[0]))
-                torch.save(self.net, file_name)
-                print('save model at: ' + file_name)
+            return loss
         else:
-            if self.epoch % 10 == 0:
-                file_name = os.path.join('checkpoints', self.args.prj, (str(self.epoch) + '_{:.3f}.pth').format(metrics[0]))
+            return 0
+
+    # @rank_zero_only
+    def validation_epoch_end(self, x):
+        if 1:#self.trainer.global_rank == 0:
+            all_out = torch.cat(self.all_out, 0)
+            all_label = torch.cat(self.all_label, 0)
+            metrics = self.get_metrics(all_label, all_out)
+
+            auc = torch.from_numpy(np.array(metrics)).cuda()
+            if not self.args.legacy:
+                for i in range(len(auc)):
+                    self.log('auc' + str(i), auc[i], on_step=False, on_epoch=True, prog_bar=True, logger=True,
+                             sync_dist=True)
+            self.all_label = []
+            self.all_out = []
+            self.tini = time.time()
+
+            self.all_loss = np.mean(self.all_loss)
+            print(self.all_loss)
+
+            if (auc[0] > self.best_auc) and (self.epoch >= 2):
+                self.best_auc = auc[0]
+
+            # saving checkpoints
+            if self.epoch % 5 == 0:
+                file_name = os.path.join(os.environ.get('LOGS'), self.args.prj, 'checkpoints', str(self.epoch) + '_' + str(auc[0].cpu().detach().numpy()) + '.pth')
                 torch.save(self.net, file_name)
 
-        self.all_loss = []
-        self.epoch += 1
-        return metrics
+            self.all_loss = []
+            self.epoch += 1
+            return metrics
+        else:
+            return 0
 
     """ Legacy Pytorch Code """
+    def save_best_auc(self, auc, metrics):
+        if (self.all_loss < self.best_loss) and (self.epoch >= 2):
+            self.best_loss = self.all_loss
+            print(self.best_loss)
+            if not self.args.legacy:
+                self.log('best_auc', auc[0])
+            file_name = os.path.join('checkpoints', self.args.prj,
+                                     (str(self.epoch) + '_{:.3f}.pth').format(metrics[0]))
+            torch.save(self.net, file_name)
+            print('save model at: ' + file_name)
+
+
     def training_loop(self, train_dataloader):
         self.net.train(mode=True)
         epoch_loss = 0

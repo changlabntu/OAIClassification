@@ -97,9 +97,9 @@ class MultiData(data.Dataset):
                 self.subset.append(PairedData(root=root, path=paired_path[p],
                                               opt=opt, mode=mode, labels=labels, transforms=transforms, index=index))
 
-    def shuffle_images(self):
-        for set in self.subset:
-            random.shuffle(set.images)
+    #def shuffle_images(self):
+    #    for set in self.subset:
+    #        random.shuffle(set.images)
 
     def __len__(self):
         return min([len(x) for x in self.subset])
@@ -113,7 +113,7 @@ class MultiData(data.Dataset):
             filenames_all = filenames_all + filenames
 
             ## inverse part
-            if labels[0] == 1:
+            if labels == 1:
                 N = len(outputs_all)
                 outputs_first_part = outputs_all[:N // 2]
                 outputs_second_part = outputs_all[N // 2:]
@@ -134,6 +134,7 @@ class PairedData(data.Dataset):
         self.index = index
 
         self.all_path = list(os.path.join(root, x) for x in path.split('_'))
+        print(self.all_path)
         # get name of images from the first folder
         self.images = sorted([x.split('/')[-1] for x in glob.glob(self.all_path[0] + '/*')])
         if self.opt.resize == 0:
@@ -234,10 +235,13 @@ class PairedData3D(PairedData):
         super(PairedData3D, self).__init__(root, path, opt, mode, labels=labels, transforms=transforms, index=index)
         self.index = index
 
+        import time
+        tini = time.time()
         subjects = sorted(list(set([x.replace('_' + x.split('_')[-1], '') for x in self.images])))
         self.subjects = dict()
         for s in subjects:
             self.subjects[s] = sorted([x for x in self.images if x.replace('_' + x.split('_')[-1], '') == s])
+        print('Time to load subjects: ', time.time() - tini)
 
     def __len__(self):
         if self.index is not None:

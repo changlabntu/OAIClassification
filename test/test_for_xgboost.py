@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader
 import torch.nn as nn
 from utils.make_config import *
-from engine.lightning_classification import LitClassification
+from engine.lightning_siamese import LitClassification
 from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers

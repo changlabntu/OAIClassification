@@ -107,7 +107,6 @@ class GFNet(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
-
         print((h, w, z))
 
         if uniform_drop:
@@ -146,7 +145,7 @@ class GFNet(nn.Module):
         self.apply(self._init_weights)
 
         #self.alex = torchvision.models.alexnet(pretrained=True).features
-        self.alex = torchvision.models.vgg11(pretrained=True).features
+        self.features = torchvision.models.vgg11(pretrained=True).features
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -180,7 +179,7 @@ class GFNet(nn.Module):
             x = x.permute(4, 0, 1, 2, 3)
             x = x.view(x.shape[0], x.shape[1]*x.shape[2], x.shape[3], x.shape[4])
 
-            x = self.alex(x)
+            x = self.features(x)
             x = x.permute(1, 0, 2, 3).unsqueeze(0)
             x = x.flatten(2).transpose(1, 2)
 
@@ -246,12 +245,14 @@ class GFSiamnese(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = GFNet(img_size=(256, 256, 23), patch_size=(32, 32, 1), embed_dim=512)
+        self.features = self.net.features
         self.classifier = nn.Linear(512, 2)
 
     def forward(self, x):
         x0 = x[0]
         x1 = x[1]
         out = self.net(x0) - self.net(x1)
+        out = nn.ReLU()(out)
         out = self.classifier(out)
         return out,
 

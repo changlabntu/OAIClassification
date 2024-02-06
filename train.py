@@ -5,7 +5,6 @@ import torch
 import torchvision
 import argparse
 from utils.make_config import *
-from engine.lightning_classification import LitClassification
 from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
@@ -14,9 +13,9 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from collections import Counter
-import torchio as tio
-load_dotenv('env/.t09')
 
+# import torchio as tio
+# environment file
 
 torch.manual_seed(0)
 torch.cuda.manual_seed_all(0)
@@ -36,7 +35,7 @@ def args_train():
                         help='number of epochs')
     parser.add_argument('-b', '--batch-size', dest='batch_size', default=1, type=int, help='batch size')
     parser.add_argument('--bu', '--batch-update', dest='batch_update', default=1, type=int, help='batch to update')
-    parser.add_argument('--lr', '--learning-rate', dest='lr', default=0.001, type=float, help='learning rate')
+    parser.add_argument('--lr', '--learning-rate', dest='lr', default=0.0005, type=float, help='learning rate')
 
     parser.add_argument('-w', '--weight-decay', dest='weight_decay', default=0.005, type=float, help='weight decay')
     # optimizer
@@ -59,8 +58,10 @@ def args_train():
 
 def train(net, args, train_set, eval_set, loss_function, metrics):
     # Data Loader
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True, pin_memory=True)
-    eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=False, num_workers=4, drop_last=True, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True,
+                              pin_memory=True)
+    eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=False, num_workers=4, drop_last=True,
+                             pin_memory=True)
 
     train_loader.__code__ = ''
 
@@ -86,17 +87,27 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
         net = nn.DataParallel(net)
 
     """ training class """
-    ln_classification = LitClassification(args=args,
-                                          train_loader=train_loader,
-                                          eval_loader=eval_loader,
-                                          net=net,
-                                          loss_function=loss_function,
-                                          metrics=metrics)
+    #if args.scheme == 'siamese':
+    #    from engine.lightning_siamese import LitClassification
+    #    model = LitClassification
+    #elif args.scheme == 'cls':
+    #    from engine.cls import LitModel
+    #    model = LitModel
+
+    models = args.scheme
+    model = getattr(__import__('engine.' + models), models).LitModel
+
+    model = model(args=args,
+                  train_loader=train_loader,
+                  eval_loader=eval_loader,
+                  net=net,
+                  loss_function=loss_function,
+                  metrics=metrics)
 
     """ vanilla pytorch mode"""
     if args.legacy:
         # Use pytorch without lightning
-        ln_classification.overall_loop()
+        model.overall_loop()
     else:
         # Use pytorch lightning for training, you can ignore it
         checkpoint_callback = ModelCheckpoint(
@@ -108,39 +119,26 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
         )
 
         # we can use loggers (from TensorBoard) to monitor the progress of training
-        tb_logger = pl_loggers.TensorBoardLogger('logs/' + args.prj + '/', default_hp_metric=False)
+        tb_logger = pl_loggers.TensorBoardLogger(os.environ.get('LOGS') + args.prj + '/', default_hp_metric=False)
         trainer = pl.Trainer(gpus=-1, strategy='ddp',
-                             max_epochs=args.epochs, progress_bar_refresh_rate=20, logger=tb_logger,
+                             max_epochs=args.epochs, logger=tb_logger,
                              accumulate_grad_batches=args.batch_update,
                              callbacks=[checkpoint_callback],
                              auto_lr_find=True)
 
         # if lr == 0  run learning rate finder
         if args.lr == 0:
-            trainer.tune(ln_classification, train_loader, eval_loader)
+            trainer.tune(model, train_loader, eval_loader)
         else:
-            trainer.fit(ln_classification, train_loader, eval_loader)
+            trainer.fit(model, train_loader, eval_loader)
 
 
-def split_five_fold(x, split):
-    N = x.shape[0] // 10
-    split5 = (list(range(N)), list(range(N, 2 * N)), list(range(2 * N, 3 * N)), list(range(3 * N, 4 * N)),
-              list(range(4 * N, 5 * N)))
-    if split == '0':
-        eval_index = split5[0]
-        train_index = split5[1] + split5[2] + split5[3] + split5[4]
-    elif split == '1':
-        eval_index = split5[1]
-        train_index = split5[0] + split5[2] + split5[3] + split5[4]
-    elif split == '2':
-        eval_index = split5[2]
-        train_index = split5[0] + split5[1] + split5[3] + split5[4]
-    elif split == '3':
-        eval_index = split5[3]
-        train_index = split5[0] + split5[1] + split5[2] + split5[4]
-    elif split == '4':
-        eval_index = split5[4]
-        train_index = split5[0] + split5[1] + split5[2] + split5[3]
+def split_N_fold(L, fold, split):
+    N = L // fold
+    split10 = [list(range(i * N, (i + 1) * N)) for i in range(fold)]
+    split10[-1] = list(range(split10[-1][0], L))
+    eval_index = split10.pop(int(split))
+    train_index= [y for x in split10 for y in x]
     return train_index, eval_index
 
 
@@ -163,14 +161,15 @@ def split_moaks(x, split):
 
 
 if __name__ == "__main__":
-    parser = args_train()
-
     from dotenv import load_dotenv
     import argparse
     from loaders.data_multi import PairedData, PairedData3D
 
+    parser = args_train()
+
     # additional arguments for dataset
     # Data
+    parser.add_argument('--env', type=str, default=None, help='environment_to_use')
     parser.add_argument('--dataset', type=str, default='womac4')
     parser.add_argument('--load3d', action='store_true', dest='load3d', default=True)
     parser.add_argument('--direction', type=str, default='a_b', help='a2b or b2a')
@@ -181,69 +180,106 @@ if __name__ == "__main__":
     parser.add_argument('--trd', type=float, dest='trd', help='threshold of images', default=0)
     parser.add_argument('--preload', action='store_true', help='preload the data once to cache')
     parser.add_argument('--split', type=str, default=None)
+    parser.add_argument('--fold', type=int, default=None)
+    parser.add_argument('--scheme', type=str)
 
     args = parser.parse_args()
+
+    if args.env is not None:
+        load_dotenv('env/.' + args.env)
+    else:
+        load_dotenv('env/.t09b')
 
     args.resize = 384
     args.cropsize = 256
 
-    #df = pd.read_csv('/home/ghc/Dropbox/TheSource/scripts/OAI_pipelines/meta/subjects_unipain_womac3.csv')
-    #train_index = [x for x in range(df.shape[0]) if not df['has_moaks'][x]]
-    #eval_index = [x for x in range(df.shape[0]) if df['has_moaks'][x]]
-    #train_index = range(213, 710)
-    #eval_index = range(0, 213)
-    #train_index = range(497)
-    #eval_index = range(497, 710)
+    # df = pd.read_csv('/home/ghc/Dropbox/TheSource/scripts/OAI_pipelines/meta/subjects_unipain_womac3.csv')
+    # train_index = [x for x in range(df.shape[0]) if not df['has_moaks'][x]]
+    # eval_index = [x for x in range(df.shape[0]) if df['has_moaks'][x]]
+    # train_index = range(213, 710)
+    # eval_index = range(0, 213)
+    # train_index = range(497)
+    # eval_index = range(497, 710)
 
-    #df = pd.read_csv('/media/ExtHDD01/OAI/OAI_extracted/OAI00womac3/OAI00womac3.csv')
-    #labels = [(x, ) for x in df.loc[df['SIDE'] == 1, 'P01KPN#EV'].astype(np.int8)]
+    # df = pd.read_csv('/media/ExtHDD01/OAI/OAI_extracted/OAI00womac3/OAI00womac3.csv')
+    # labels = [(x, ) for x in df.loc[df['SIDE'] == 1, 'P01KPN#EV'].astype(np.int8)]
 
-    #x = pd.read_csv('/home/ghc/Dropbox/TheSource/scripts/OAI_API/meta/womac4min0.csv')
-    #labels = x.loc[x['SIDE'] == 'RIGHT']['V$$WOMKPR'] > x.loc[x['SIDE'] == 'RIGHT']['V$$WOMKPL']
+    # x = pd.read_csv('/home/ghc/Dropbox/TheSource/scripts/OAI_API/meta/womac4min0.csv')
+    # labels = x.loc[x['SIDE'] == 'RIGHT']['V$$WOMKPR'] > x.loc[x['SIDE'] == 'RIGHT']['V$$WOMKPL']
     x = pd.read_csv('env/womac4_moaks.csv')
     labels = (x.loc[x['SIDE'] == 'RIGHT']['V$$WOMKP#']).values > (x.loc[x['SIDE'] == 'LEFT']['V$$WOMKP#']).values
-    labels = [(int(x), ) for x in labels]
-    has_moaks = (~x['READPRJ'].isna())
+    labels = [int(x) for x in labels]
+    #labels = [(int(x),) for x in labels]
+    knee_painful = x.loc[(x['V$$WOMKP#'] > 0)].reset_index()
+    pmindex = knee_painful.loc[~knee_painful['READPRJ'].isna()].index.values
 
-    if args.split is not None:
-        args.prj = args.prj + '/' + args.split + '/'
-        train_index, eval_index = split_moaks(x, args.split)
+    ID_has_eff = x.loc[~x['V$$MEFFWK'].isna()]['ID'].unique()
+    pmeffid = knee_painful.loc[knee_painful['ID'].isin(ID_has_eff)].index.values
 
     from loaders.data_multi import MultiData as Dataset
-    train_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/full/',
-                        path=args.direction, opt=args, labels=labels, mode='train', index=train_index)
+    if 0:
+        if args.split is not None:
+            args.prj = args.prj + '/' + args.split + '/'
+            if args.split == 'moaks':
+                train_index = [y for y in range(x.shape[0] // 2) if y not in pmindex]
+                eval_index = [y for y in range(x.shape[0] // 2) if y in pmindex]
+            elif args.split == 'moaksid':
+                train_index = [y for y in range(x.shape[0] // 2) if y not in pmeffid]
+                eval_index = [y for y in range(x.shape[0] // 2) if y in pmeffid]
+            else:
+                train_index, eval_index = split_N_fold(L=x.shape[0] // 2, fold=args.fold, split=args.split)
+
+        train_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/full/',
+                            path=args.direction, opt=args, labels=labels, mode='train', index=train_index)
+        print(len(train_set))
+        eval_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/full/',
+                           path=args.direction, opt=args, labels=labels, mode='test', index=eval_index)
+        print(len(eval_set))
+
+    train_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/train/',
+                        path=args.direction, opt=args, labels=labels, mode='train', index=None)
     print(len(train_set))
-    eval_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/full/',
-                       path=args.direction, opt=args, labels=labels, mode='test', index=eval_index)
+    eval_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/val/',
+                       path=args.direction, opt=args, labels=labels, mode='test', index=None)
     print(len(eval_set))
 
-# Networks
-if args.backbone == 'densenet3D':
-    from models.densenet3D.MRdensenet3D import MRDenseNet3D
-    net = MRDenseNet3D()
-else:
-    if args.repeat > 0:
-        from models.MRPretrainedRepeat import MRPretrainedRepeat
-        net = MRPretrainedRepeat(args_m=args)
-    else:
-        from models.MRPretrainedSiamese import MRPretrainedSiamese
-        net = MRPretrainedSiamese(args_m=args)
+    # Networks
+    if args.scheme == 'siamese':
+        if args.backbone == 'densenet3D':
+            from models.densenet3D.MRdensenet3D import MRDenseNet3D
 
-    #from models.gfnet.gfnet0112 import GFSiamnese
-    #net = GFSiamnese()
+            net = MRDenseNet3D()
 
-#from models.BiT import BITSiamnese
-#net = BITSiamnese()
+        elif args.backbone == 'gfnet':
+            from models.gfnet.gfnet0112 import GFSiamnese
+            net = GFSiamnese()
+        else:
+            if args.repeat > 0:
+                from models.MRPretrainedRepeat import MRPretrainedRepeat
 
-# Performance
-from utils.metrics_classification import ClassificationLoss, GetAUC
-loss_function = ClassificationLoss()
-metrics = GetAUC()
+                net = MRPretrainedRepeat(args_m=args)
+            else:
+                from models.MRPretrainedSiamese import MRPretrainedSiamese
 
-os.makedirs(os.path.join('checkpoints', args.prj), exist_ok=True)
+                net = MRPretrainedSiamese(args_m=args)
+    elif args.scheme == 'cls':
+        from models.MRPretrained import MRPretrained
+        net = MRPretrained(args_m=args)
 
-args.not_tracking_hparams = ['mode', 'port', 'parallel', 'epochs', 'legacy']
-train(net, args, train_set, eval_set, loss_function, metrics)
+    # from models.BiT import BITSiamnese
+    # net = BITSiamnese()
 
-# CUDA_VISIBLE_DEVICES=1 python train.py --backbone vgg11 --fuse cat -w 0 --prj womac4check
-# CUDA_VISIBLE_DEVICES=0 python train.py --backbone alexnet --fuse simple3 --direction effusion/aeffpainYphiB_effusion/beffpainYphiB --repeat 5
+    # Performance
+    from utils.metrics_classification import ClassificationLoss, GetAUC
+
+    loss_function = ClassificationLoss()
+    metrics = GetAUC()
+
+    os.makedirs(os.path.join('checkpoints', args.prj), exist_ok=True)
+
+    args.not_tracking_hparams = ['mode', 'port', 'parallel', 'epochs', 'legacy']
+    train(net, args, train_set, eval_set, loss_function, metrics)
+
+    # CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone vgg11 --fuse cat -w 0 --prj womac4check
+    # CUDA_VISIBLE_DEVICES=0 python train.py --backbone alexnet --fuse simple3 --direction effusion/aeffpainYphiB_effusion/beffpainYphiB --repeat 5
+    #  CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone vgg19 --fuse cat --prj separate_mri  --load3d --prj moaksid/sig --direction pain0323/sigA_pain0323/sigB --split moaksid  --dataset womac4 --lr 0.0002 --freeze --preload

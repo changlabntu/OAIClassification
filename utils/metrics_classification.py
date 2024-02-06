@@ -21,7 +21,7 @@ class CrossEntropyLoss(nn.Module):
         return loss_c,
 
 
-class ContrastiveLoss(nn.Module):
+class ContrastiveLossXXX(nn.Module):
     """
     Contrastive loss
     Takes embeddings of two samples and a target label == 1 if samples are from the same class and label == 0 otherwise
@@ -53,8 +53,8 @@ class ClassificationLoss(nn.Module):
         return 1
 
     def forward(self, output, labels):
-        x = output[0]
-        y = labels[0]
+        x = output
+        y = labels
         loss_classify, = self.cross_entropy_loss(x, y)
 
         loss_all = [loss_classify]
@@ -63,7 +63,7 @@ class ClassificationLoss(nn.Module):
         return loss_val, loss_all
 
 
-class ClassifyAndContrastiveLoss(nn.Module):
+class ClassifyAndContrastiveLossXXX(nn.Module):
     """Dice loss of binary class
     Args:
     Returns:
