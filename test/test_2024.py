@@ -5,7 +5,6 @@ import pandas as pd
 from torch.utils.data import DataLoader
 import torch.nn as nn
 from utils.make_config import *
-from engine.lightning_siamese import LitClassification
 from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
@@ -16,8 +15,14 @@ from sklearn.metrics import accuracy_score
 from sklearn.metrics import roc_auc_score
 import tifffile as tiff
 from utils.metrics_classification import ClassificationLoss, GetAUC
+from loaders.data_multi import MultiData as Dataset
+from dotenv import load_dotenv
+import argparse
+from loaders.data_multi import PairedData, PairedData3D
+
 metrics = GetAUC()
 load_dotenv('.env')
+
 
 def args_train():
     parser = argparse.ArgumentParser()
@@ -51,48 +56,48 @@ def args_train():
     parser.add_argument('--mode', type=str, default='dummy')
     parser.add_argument('--port', type=str, default='dummy')
 
+    parser.add_argument('--dataset', type=str, default='womac4')
+    parser.add_argument('--load3d', action='store_true', dest='load3d', default=True)
+    parser.add_argument('--direction', type=str, default='a_b', help='a2b or b2a')
+    parser.add_argument('--flip', action='store_true', dest='flip', default=False, help='image flip left right')
+    parser.add_argument('--resize', type=int, default=0)
+    parser.add_argument('--cropsize', type=int, default=0)
+    parser.add_argument('--n01', action='store_true', dest='n01', default=False)
+    parser.add_argument('--trd', type=float, dest='trd', help='threshold of images', default=0)
+    parser.add_argument('--preload', action='store_true', help='preload the data once to cache')
+    parser.add_argument('--split', type=str, default=None)
+    parser.add_argument('--fold', type=int, default=None)
+
     return parser
 
-from dotenv import load_dotenv
-import argparse
-from loaders.data_multi import PairedData, PairedData3D
+parser = args_train()
+args = parser.parse_args()
+
 load_dotenv('env/.t09b')
 x = pd.read_csv('env/womac4_moaks.csv')
 labels = (x.loc[x['SIDE'] == 'RIGHT']['V$$WOMKP#']).values > (x.loc[x['SIDE'] == 'LEFT']['V$$WOMKP#']).values
 
-parser = args_train()
+
 # Model
-ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/siamese/vgg19max2/*.pth'))[12-2]
+ckpt_path = '/media/ExtHDD01/logscls/'
+#ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/siamese/vgg19max2/*.pth'))[12-2]
 #ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/siamese/alexmax2/*.pth'))[10-2]
 #ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/alexmaxA/*.pth'))[9-2]
 #ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/alexmaxA%/*.pth'))[7-2]
+
+#ckpt = sorted(glob.glob(ckpt_path + 'siamese/vgg11max2%test2/checkpoints/*.pth'))[14-2]
+ckpt = sorted(glob.glob(ckpt_path + 'siamese/vgg19max2/checkpoints/*.pth'))[12-2]
 net = torch.load(ckpt, map_location='cpu')
 net = net.cuda()
-net = net.train()
+net = net.eval()
 
 # Data
-from loaders.data_multi import MultiData as Dataset
-
-parser.add_argument('--dataset', type=str, default='womac4')
-parser.add_argument('--load3d', action='store_true', dest='load3d', default=True)
-parser.add_argument('--direction', type=str, default='a_b', help='a2b or b2a')
-parser.add_argument('--flip', action='store_true', dest='flip', default=False, help='image flip left right')
-parser.add_argument('--resize', type=int, default=0)
-parser.add_argument('--cropsize', type=int, default=0)
-parser.add_argument('--n01', action='store_true', dest='n01', default=False)
-parser.add_argument('--trd', type=float, dest='trd', help='threshold of images', default=0)
-parser.add_argument('--preload', action='store_true', help='preload the data once to cache')
-parser.add_argument('--split', type=str, default=None)
-parser.add_argument('--fold', type=int, default=None)
-
-args = parser.parse_args()
-
 eval_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/fullXXX/',
                    path='ap_bp', opt=args, labels=[(int(x),) for x in labels], mode='test', index=None)
 
 eval_loader = DataLoader(eval_set, batch_size=1, shuffle=False, num_workers=4, drop_last=False)
 
-if 0:
+if 1:
     # Forward
     all_out = []
     all_label = []
@@ -124,8 +129,6 @@ if 0:
         all_xA = all_xA.unsqueeze(2).unsqueeze(3)
         all_xB = all_xB.unsqueeze(2).unsqueeze(3)
 
-
-
     loss_function = ClassificationLoss()
     # AUC from classifier
 
@@ -138,17 +141,33 @@ if 0:
     print('AUC=  ' + str(metrics(all_label[:667], out[:667, :])[0]))
 
     # By difference to average(No Pain)
-    all_xB_mean = torch.mean(all_xB[667:, ::], 0).unsqueeze(0).repeat(667 * 2, 1, 1, 1)
+    all_xB_mean = torch.min(all_xA[667:, ::], 0)[0].unsqueeze(0).repeat(667 * 2, 1, 1, 1)
     new_test = torch.cat([all_xA[:667, ::], all_xB[:667, ::]], 0)
     out = net.classifier((new_test - all_xB_mean).cuda()).detach().cpu()[:, :, 0, 0]
     print('AUC=  ' + str(metrics(np.array([0]*667 + [1] * 667), out)[0]))
 
+    #
+    new_train = all_xB[667:, ::]
+    new_test = torch.cat([all_xA[:667, ::], all_xB[:667, ::]], 0)
+
+    out_i = []
+    for i in tqdm(range(new_test.shape[0])):
+        out_ij = []
+        for j in range(new_train.shape[0]):
+            out = net.classifier(((new_train[j] - new_test[i])).unsqueeze(0).cuda()).detach().cpu()[:, :, 0, 0]
+            out_ij.append(out)
+        out_ij = torch.cat(out_ij, 0)
+        out_ij = torch.mean(out_ij, 0)
+        out_ij = nn.Softmax(dim=0)(out_ij)
+        out_i.append(out_ij.unsqueeze(0))
+    out_i = torch.cat(out_i, 0)
+    print('AUC=  ' + str(metrics(np.array([0]*667 + [1] * 667), out_i[::])[0]))
 
     # SVM
     X_train = torch.cat([all_xA[667:,:,0,0], all_xB[667:,:,0,0]], 0).numpy()
     y_train = np.array([0]*1558 + [1] * 1558)
     X_test = torch.cat([all_xA[:667,:,0,0], all_xB[:667,:,0,0]], 0).numpy()
-    y_test =np.array([0]*667 + [1] * 667)
+    y_test = np.array([0]*667 + [1] * 667)
     # Create a SVM Classifier
     clf = svm.SVC(kernel='poly', probability=True)  # Linear Kernel
     # Train the model using the training sets
@@ -305,3 +324,5 @@ ac = nn.Softmax(dim=1)(out_ac)
 ab3 = np.array([ab[i, int(labels[i] / 1)] for i in range(200)])
 cb3 = np.array([cb[i, int(labels[i] / 1)] for i in range(200)])
 ac3 = np.array([ac[i, int(labels[i] / 1)] for i in range(200)])
+
+plt.scatter(ab2, ac3);plt.show()

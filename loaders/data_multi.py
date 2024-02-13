@@ -97,9 +97,12 @@ class MultiData(data.Dataset):
                 self.subset.append(PairedData(root=root, path=paired_path[p],
                                               opt=opt, mode=mode, labels=labels, transforms=transforms, index=index))
 
-    #def shuffle_images(self):
-    #    for set in self.subset:
-    #        random.shuffle(set.images)
+        #self.shuffle_images()
+
+    def shuffle_images(self):
+        for set in self.subset:
+            #print('shuffle ' + set)
+            random.shuffle(set.orders)
 
     def __len__(self):
         return min([len(x) for x in self.subset])
@@ -243,11 +246,13 @@ class PairedData3D(PairedData):
             self.subjects[s] = sorted([x for x in self.images if x.replace('_' + x.split('_')[-1], '') == s])
         print('Time to load subjects: ', time.time() - tini)
 
+        self.orders = sorted(self.subjects.keys())
+
     def __len__(self):
         if self.index is not None:
             return len(self.index)
         else:
-            return len(self.subjects.keys())
+            return len(self.orders)
 
     def __getitem__(self, idx):
         if self.index is not None:
@@ -256,7 +261,7 @@ class PairedData3D(PairedData):
             index = idx
 
         # add all the slices into the dict
-        a_subject = sorted(self.subjects.keys())[index]  # get the subject name
+        a_subject = self.orders[index]  # get the subject name
         filenames = []
         length_of_each_path = []
         for i in range(len(self.all_path)):  # loop over all the paths

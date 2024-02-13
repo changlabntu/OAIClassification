@@ -33,10 +33,6 @@ class LitModel(BaseModel):
         if len(imgs) == 2:
             imgs[0] = imgs[0].repeat(1, 3, 1, 1, 1)
             imgs[1] = imgs[1].repeat(1, 3, 1, 1, 1)
-        elif len(imgs) == 4:
-            imgs = (torch.cat([imgs[1], imgs[0], imgs[0]], 1), torch.cat([imgs[3], imgs[2], imgs[2]], 1))
-        elif len(imgs) == 6:
-            imgs = (torch.cat([imgs[0], imgs[1], imgs[2]], 1), torch.cat([imgs[3], imgs[4], imgs[5]], 1))
 
         output, features = self.net(imgs)
 
@@ -53,15 +49,12 @@ class LitModel(BaseModel):
         if 1:#self.trainer.global_rank == 0:
             imgs = batch['img']
             labels = batch['labels']
+            np.save('b.npy', np.array(batch['filenames']))
 
             # repeat part
             if len(imgs) == 2:
                 imgs[0] = imgs[0].repeat(1, 3, 1, 1, 1)
                 imgs[1] = imgs[1].repeat(1, 3, 1, 1, 1)
-            elif len(imgs) == 4:
-                imgs = (torch.cat([imgs[1], imgs[0], imgs[0]], 1), torch.cat([imgs[3], imgs[2], imgs[2]], 1))
-            elif len(imgs) == 6:
-                imgs = (torch.cat([imgs[0], imgs[1], imgs[2]], 1), torch.cat([imgs[3], imgs[4], imgs[5]], 1))
 
             output, features = self.net(imgs)
 

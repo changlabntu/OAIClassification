@@ -35,14 +35,14 @@ class BaseModel(pl.LightningModule):
         self.best_auc = 0
 
         # adding data
-        self.train_dataloader = train_loader
-        self.eval_dataloader = eval_loader
+        self.train_loader = train_loader
+        self.eval_loader = eval_loader
 
         # adding training components
         self.net = net
         self.loss_function = loss_function
         self.get_metrics = metrics
-        self.optimizer = self.configure_optimizers()
+        #self.optimizer = self.configure_optimizers()
 
         self.epoch = 0
 
@@ -62,6 +62,8 @@ class BaseModel(pl.LightningModule):
         self.all_out = []
         self.best_loss = np.inf
         self.all_loss = []
+        self.train_loader.dataset.shuffle_images()  # !!! STUPID shuffle again just to make sure
+        self.eval_loader.dataset.shuffle_images()  # !!! STUPID shuffle again just to make sure
 
     def configure_optimizers(self):
         optimizer = None
@@ -82,6 +84,9 @@ class BaseModel(pl.LightningModule):
             scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
             # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+
+        model_parameters = filter(lambda p: p.requires_grad, self.net.parameters())
+        print('Number of parameters: ' + str(sum([np.prod(p.size()) for p in model_parameters])))
 
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
@@ -141,6 +146,8 @@ class BaseModel(pl.LightningModule):
 
     # @rank_zero_only
     def validation_epoch_end(self, x):
+        self.train_loader.dataset.shuffle_images()
+        self.eval_loader.dataset.shuffle_images()
         if 1:#self.trainer.global_rank == 0:
             all_out = torch.cat(self.all_out, 0)
             all_label = torch.cat(self.all_label, 0)
@@ -185,10 +192,10 @@ class BaseModel(pl.LightningModule):
             print('save model at: ' + file_name)
 
 
-    def training_loop(self, train_dataloader):
+    def training_loop(self, train_loader):
         self.net.train(mode=True)
         epoch_loss = 0
-        for i, batch in enumerate(train_dataloader):
+        for i, batch in enumerate(train_loader):
             loss = self.training_step(batch=batch)
             loss.backward()
             epoch_loss += loss
@@ -197,12 +204,12 @@ class BaseModel(pl.LightningModule):
                 self.optimizer.zero_grad()
         return epoch_loss / i
 
-    def eval_loop(self, eval_dataloader):
+    def eval_loop(self, eval_loader):
         self.net.train(mode=False)
         self.net.eval()
         epoch_loss = 0
         with torch.no_grad():
-            for i, batch in enumerate(eval_dataloader):
+            for i, batch in enumerate(eval_loader):
                 loss = self.validation_step(batch=batch)
                 epoch_loss += loss
             metrics = self.validation_epoch_end(x=None)
@@ -211,9 +218,9 @@ class BaseModel(pl.LightningModule):
     def overall_loop(self):
         for epoch in range(self.args.epochs):
             tini = time.time()
-            train_loss = self.training_loop(self.train_dataloader)
+            train_loss = self.training_loop(self.train_loader)
             with torch.no_grad():
-                eval_loss, eval_metrics = self.eval_loop(self.eval_dataloader)
+                eval_loss, eval_metrics = self.eval_loop(self.eval_loader)
 
             print_out = {
                 'Epoch: {}': [epoch],

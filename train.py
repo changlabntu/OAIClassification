@@ -60,7 +60,7 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
     # Data Loader
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True,
                               pin_memory=True)
-    eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=False, num_workers=4, drop_last=True,
+    eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True,
                              pin_memory=True)
 
     train_loader.__code__ = ''
@@ -69,11 +69,25 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
     if args.preload:
         tini = time.time()
         print('Preloading...')
+        train_filenames = []
+        eval_filenames = []
         for i, x in enumerate(tqdm(train_loader)):
+            train_filenames.append(x['filenames'])
             pass
         for i, x in enumerate(tqdm(eval_loader)):
+            eval_filenames.append(x['filenames'])
             pass
         print('Preloading time: ' + str(time.time() - tini))
+        train_filenames = [y for x in train_filenames for y in x]
+        eval_filenames = [y for x in eval_filenames for y in x]
+        # make sure the train_filenames and eval_filenames are different
+        # Flatten the lists of filenames
+        train_filenames_flat = [item for sublist in train_filenames for item in sublist]
+        eval_filenames_flat = [item for sublist in eval_filenames for item in sublist]
+        # Check if there is no intersection between the flattened lists
+        assert len(set(train_filenames_flat).intersection(set(eval_filenames_flat))) == 0
+
+        print('Asserted that train and eval filenames are different')
 
     # freezing parameters
     if args.freeze:
@@ -87,13 +101,6 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
         net = nn.DataParallel(net)
 
     """ training class """
-    #if args.scheme == 'siamese':
-    #    from engine.lightning_siamese import LitClassification
-    #    model = LitClassification
-    #elif args.scheme == 'cls':
-    #    from engine.cls import LitModel
-    #    model = LitModel
-
     models = args.scheme
     model = getattr(__import__('engine.' + models), models).LitModel
 
@@ -119,7 +126,7 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
         )
 
         # we can use loggers (from TensorBoard) to monitor the progress of training
-        tb_logger = pl_loggers.TensorBoardLogger(os.environ.get('LOGS') + args.prj + '/', default_hp_metric=False)
+        tb_logger = pl_loggers.TensorBoardLogger(os.path.join(os.environ.get('LOGS'), args.prj), default_hp_metric=False)
         trainer = pl.Trainer(gpus=-1, strategy='ddp',
                              max_epochs=args.epochs, logger=tb_logger,
                              accumulate_grad_batches=args.batch_update,
@@ -172,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument('--env', type=str, default=None, help='environment_to_use')
     parser.add_argument('--dataset', type=str, default='womac4')
     parser.add_argument('--load3d', action='store_true', dest='load3d', default=True)
-    parser.add_argument('--direction', type=str, default='a_b', help='a2b or b2a')
+    parser.add_argument('--direction', type=str, default='ap%bp', help='a2b or b2a')
     parser.add_argument('--flip', action='store_true', dest='flip', default=False, help='image flip left right')
     parser.add_argument('--resize', type=int, default=0)
     parser.add_argument('--cropsize', type=int, default=0)
@@ -244,7 +251,10 @@ if __name__ == "__main__":
     print(len(eval_set))
 
     # Networks
-    if args.scheme == 'siamese':
+    if args.scheme == 'cls':
+        from models.MRPretrained import MRPretrained
+        net = MRPretrained(args_m=args)
+    else:
         if args.backbone == 'densenet3D':
             from models.densenet3D.MRdensenet3D import MRDenseNet3D
 
@@ -262,9 +272,7 @@ if __name__ == "__main__":
                 from models.MRPretrainedSiamese import MRPretrainedSiamese
 
                 net = MRPretrainedSiamese(args_m=args)
-    elif args.scheme == 'cls':
-        from models.MRPretrained import MRPretrained
-        net = MRPretrained(args_m=args)
+
 
     # from models.BiT import BITSiamnese
     # net = BITSiamnese()
@@ -275,9 +283,16 @@ if __name__ == "__main__":
     loss_function = ClassificationLoss()
     metrics = GetAUC()
 
-    os.makedirs(os.path.join('checkpoints', args.prj), exist_ok=True)
+
+    os.makedirs(os.path.join(os.environ.get('LOGS'), args.prj, 'checkpoints'), exist_ok=True)
 
     args.not_tracking_hparams = ['mode', 'port', 'parallel', 'epochs', 'legacy']
+
+    o = train_set.__getitem__(0)
+    print((o['filenames'][0]), o['filenames'][-1])
+    o = eval_set.__getitem__(0)
+    print((o['filenames'][0]), o['filenames'][-1])
+
     train(net, args, train_set, eval_set, loss_function, metrics)
 
     # CUDA_VISIBLE_DEVICES=0,1 python train.py --backbone vgg11 --fuse cat -w 0 --prj womac4check
