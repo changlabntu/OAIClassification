@@ -111,6 +111,7 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
                   loss_function=loss_function,
                   metrics=metrics)
 
+
     """ vanilla pytorch mode"""
     if args.legacy:
         # Use pytorch without lightning
@@ -189,6 +190,11 @@ if __name__ == "__main__":
     parser.add_argument('--split', type=str, default=None)
     parser.add_argument('--fold', type=int, default=None)
     parser.add_argument('--scheme', type=str)
+
+    # Model-specific Arguments
+    models = parser.parse_known_args()[0].scheme
+    model = getattr(__import__('engine.' + models), models).LitModel
+    parser = model.add_model_specific_args(parser)
 
     args = parser.parse_args()
 
@@ -282,7 +288,6 @@ if __name__ == "__main__":
 
     loss_function = ClassificationLoss()
     metrics = GetAUC()
-
 
     os.makedirs(os.path.join(os.environ.get('LOGS'), args.prj, 'checkpoints'), exist_ok=True)
 

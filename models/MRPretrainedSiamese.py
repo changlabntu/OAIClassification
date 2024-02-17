@@ -34,6 +34,14 @@ class MRPretrainedSiamese(MRPretrained):
         x0 = x0.permute(0, 2, 3, 4, 1)  # (B, 512, 7, 7, 23)
         x1 = x1.permute(0, 2, 3, 4, 1)
 
+        if self.fuse == 'cat0':  # max-pooling across the slices
+            x0 = torch.mean(x0, dim=(2, 3))  # (B, 512, 1, 1, 23)
+            x1 = torch.mean(x1, dim=(2, 3))
+            x0, _ = torch.max(x0, 2)
+            x1, _ = torch.max(x1, 2)
+            out = self.classifier_cat0(torch.cat([x0, x1], 1).unsqueeze(2).unsqueeze(3))  # (Classes)
+            out = out[:, :, 0, 0]
+
         if self.fuse == 'max2':  # max-pooling across the slices
             x0 = torch.mean(x0, dim=(2, 3))  # (B, 512, 1, 1, 23)
             x1 = torch.mean(x1, dim=(2, 3))

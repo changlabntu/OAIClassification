@@ -115,6 +115,7 @@ class MRPretrained(nn.Module):
         self.classifier = nn.Conv2d(self.fmap_c, args_m.n_classes, 1, 1, 0)
         self.classifier_cat = nn.Conv2d(self.fmap_c * 23, args_m.n_classes, 1, 1, 0)
         self.classifier_cat2 = nn.Conv2d(self.fmap_c * 23 * 2, args_m.n_classes, 1, 1, 0)
+        self.classifier_cat0 = nn.Conv2d(self.fmap_c * 2, args_m.n_classes, 1, 1, 0)
         self.avg = nn.AdaptiveAvgPool2d((1, 1))
         self.fuse = args_m.fuse
 

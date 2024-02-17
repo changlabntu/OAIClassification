@@ -15,11 +15,10 @@ class TripletCenterLoss(nn.Module):
         super(TripletCenterLoss, self).__init__()
         self.margin = margin
         self.ranking_loss = nn.MarginRankingLoss(margin=margin)
-        self.centers = nn.Parameter(torch.randn(num_classes, 512))
+        self.centers = nn.Parameter(torch.randn(num_classes, 512)).cuda()
 
     def forward(self, inputs, targets):
         batch_size = inputs.size(0)
-        print(batch_size)
         targets_expand = targets.view(batch_size, 1).expand(batch_size, inputs.size(1))
         centers_batch = self.centers.gather(0, targets_expand)  # centers batch
 
@@ -28,7 +27,6 @@ class TripletCenterLoss(nn.Module):
         inputs_bz = torch.stack([inputs] * batch_size).transpose(0, 1)
         dist = torch.sum((centers_batch_bz - inputs_bz) ** 2, 2).squeeze()
         dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
-        print(dist)
         # for each anchor, find the hardest positive and negative
         mask = targets.expand(batch_size, batch_size).eq(targets.expand(batch_size, batch_size).t())
         dist_ap, dist_an = [], []
@@ -36,12 +34,8 @@ class TripletCenterLoss(nn.Module):
             dist_ap.append(dist[i][mask[i]].max())  # mask[i]: positive samples of sample i
             dist_an.append(dist[i][mask[i] == 0].min())  # mask[i]==0: negative samples of sample i
 
-        for x in dist_ap:
-            print(x.shape)
-        for x in dist_an:
-            print(x.shape)
-        dist_ap = torch.cat(dist_ap)
-        dist_an = torch.cat(dist_an)
+        dist_ap = torch.stack(dist_ap)
+        dist_an = torch.stack(dist_an)
 
         # generate a new label y
         # compute ranking hinge loss
@@ -115,10 +109,18 @@ class LitModel(BaseModel):
 
         self.triple = nn.TripletMarginLoss()
         self.center = CenterLoss(feat_dim=32)
+        self.triplecenter = TripletCenterLoss(margin=0.3, num_classes=2)#.cuda()
 
         # update the parameters for the optimizer
         self.optimizer = self.configure_optimizers()
 
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = parent_parser.add_argument_group("LitModel")
+        parser.add_argument('-t', dest='t', default=1, type=float, help='triplelet loss')
+        parser.add_argument('-c', dest='c', default=1, type=float, help='center loss')
+        parser.add_argument('--tc', dest='tc', default=1, type=float, help='triplelet center loss')
+        return parent_parser
 
     def training_step(self, batch, batch_idx=0):
         # training_step defined the train loop. It is independent of forward
@@ -136,28 +138,14 @@ class LitModel(BaseModel):
         # contrastive loss
         featuresA = []
         featuresB = []
-        if 0:
-            if labels[0] == 1:
-                featuresA.append(features[1][:1, ::])
-                featuresB.append(features[0][:1, ::])
-            else:
-                featuresA.append(features[0][:1, ::])
-                featuresB.append(features[1][:1, ::])
 
-            if labels[1] == 1:
-                featuresA.append(features[1][1:, ::])
-                featuresB.append(features[0][1:, ::])
+        for i in range(len(labels)):
+            if labels[i] == 1:
+                featuresA.append(features[1][i:i+1, ::])
+                featuresB.append(features[0][i:i+1, ::])
             else:
-                featuresA.append(features[0][1:, ::])
-                featuresB.append(features[1][1:, ::])
-        else:
-            for i in range(len(labels)):
-                if labels[i] == 1:
-                    featuresA.append(features[1][i:i+1, ::])
-                    featuresB.append(features[0][i:i+1, ::])
-                else:
-                    featuresA.append(features[0][i:i+1, ::])
-                    featuresB.append(features[1][i:i+1, ::])
+                featuresA.append(features[0][i:i+1, ::])
+                featuresB.append(features[1][i:i+1, ::])
 
         featuresA = torch.cat(featuresA, dim=0)
         featuresB = torch.cat(featuresB, dim=0)
@@ -172,14 +160,19 @@ class LitModel(BaseModel):
         loss_center = self.center(torch.cat([f for f in [featuresA, featuresB]], dim=0),
                                   torch.FloatTensor([1] * featuresA.shape[0] + [0] * featuresA.shape[0]).cuda())
 
-        self.log('train_loss', loss, on_step=False, on_epoch=True,
+        loss_tc, _ = self.triplecenter(torch.cat([f for f in [featuresA, featuresB]], dim=0),
+                                  torch.FloatTensor([1] * featuresA.shape[0] + [0] * featuresA.shape[0]).type(torch.LongTensor).cuda())
+
+        self.log('train', loss, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
         self.log('t', loss_t, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
         self.log('c', loss_center, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
+        self.log('tc', loss_tc, on_step=False, on_epoch=True,
+                 prog_bar=True, logger=True, sync_dist=True)
 
-        return 1 * loss #+ loss_t + loss_center
+        return loss + self.args.t * loss_t + self.args.c * loss_center + self.args.tc * loss_tc
 
     # @rank_zero_only
     def validation_step(self, batch, batch_idx=0):
@@ -196,7 +189,7 @@ class LitModel(BaseModel):
 
             loss, _ = self.loss_function(output, labels)
             if not self.args.legacy:
-                self.log('val_loss', loss, on_step=False, on_epoch=True,
+                self.log('val', loss, on_step=False, on_epoch=True,
                          prog_bar=True, logger=True, sync_dist=True)
 
             # metrics

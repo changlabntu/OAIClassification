@@ -5,7 +5,8 @@ import torch.nn as nn
 import os
 import tifffile as tiff
 from torch.optim import lr_scheduler
-
+import csv
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 # from pytorch_lightning.utilities import rank_zero_only
 
@@ -144,7 +145,13 @@ class BaseModel(pl.LightningModule):
         else:
             return 0
 
-    # @rank_zero_only
+    def save_auc_csv(self, auc, epoch):
+        auc = auc.cpu().numpy()
+        auc = np.insert(auc, 0, epoch)
+        with open(os.path.join(os.environ.get('LOGS'), self.args.prj, 'auc.csv'), 'a') as f:
+            writer = csv.writer(f)
+            writer.writerow(auc)
+
     def validation_epoch_end(self, x):
         self.train_loader.dataset.shuffle_images()
         self.eval_loader.dataset.shuffle_images()
@@ -162,19 +169,20 @@ class BaseModel(pl.LightningModule):
             self.all_out = []
             self.tini = time.time()
 
-            self.all_loss = np.mean(self.all_loss)
-            print(self.all_loss)
-
             if (auc[0] > self.best_auc) and (self.epoch >= 2):
                 self.best_auc = auc[0]
 
             # saving checkpoints
             if self.epoch % 5 == 0:
-                file_name = os.path.join(os.environ.get('LOGS'), self.args.prj, 'checkpoints', str(self.epoch) + '_' + str(auc[0].cpu().detach().numpy()) + '.pth')
+                #file_name = os.path.join(os.environ.get('LOGS'), self.args.prj, 'checkpoints', str(self.epoch) + '_' + str(auc[0].cpu().detach().numpy()) + '.pth')
+                file_name = os.path.join(os.environ.get('LOGS'), self.args.prj, 'checkpoints',
+                                         str(self.epoch) + '.pth')
+                print('save model at: ' + file_name)
                 torch.save(self.net, file_name)
 
             self.all_loss = []
             self.epoch += 1
+            self.save_auc_csv(auc[0], self.epoch)
             return metrics
         else:
             return 0

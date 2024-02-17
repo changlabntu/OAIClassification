@@ -45,7 +45,6 @@ def imagesc(x, show=True, save=None):
     if save:
         x.save(save)
 
-
 def separate_subjects_n_slices(img_list):
     "for knee project"
     temp = [x.split('.')[0].split('_') for x in img_list]
@@ -64,7 +63,7 @@ def get_transforms(crop_size, resize, additional_targets, need=('train', 'test')
     if 'train' in need:
         transformations['train'] = A.Compose([
             A.Resize(resize, resize),
-            #A.augmentations.geometric.rotate.Rotate(limit=45, p=0.5),
+            A.augmentations.geometric.rotate.Rotate(limit=45, p=0.5),
             A.RandomCrop(height=crop_size, width=crop_size, p=1.),
             #A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5), max_pixel_value=400),
             ToTensorV2(p=1.0),
@@ -244,7 +243,6 @@ class PairedData3D(PairedData):
         self.subjects = dict()
         for s in subjects:
             self.subjects[s] = sorted([x for x in self.images if x.replace('_' + x.split('_')[-1], '') == s])
-        print('Time to load subjects: ', time.time() - tini)
 
         self.orders = sorted(self.subjects.keys())
 

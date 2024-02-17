@@ -4,4 +4,4 @@ export DATASET='/workspace/Data/'
 
 # Submodels
 export model_t2d='submodels/netG_TSE_DESS_up256patchgan.pth'
-export model_seg='submodels/SegScale.pth'
+export model_seg='submodels/SegScale.pth's

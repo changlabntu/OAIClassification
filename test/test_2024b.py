@@ -5,7 +5,6 @@ import pandas as pd
 from torch.utils.data import DataLoader
 import torch.nn as nn
 from utils.make_config import *
-#from engine.siamese import LitClassification
 from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
@@ -16,8 +15,14 @@ from sklearn.metrics import accuracy_score
 from sklearn.metrics import roc_auc_score
 import tifffile as tiff
 from utils.metrics_classification import ClassificationLoss, GetAUC
+from loaders.data_multi import MultiData as Dataset
+from dotenv import load_dotenv
+import argparse
+from loaders.data_multi import PairedData, PairedData3D
+
 metrics = GetAUC()
 load_dotenv('.env')
+
 
 def args_train():
     parser = argparse.ArgumentParser()
@@ -51,44 +56,43 @@ def args_train():
     parser.add_argument('--mode', type=str, default='dummy')
     parser.add_argument('--port', type=str, default='dummy')
 
+    parser.add_argument('--dataset', type=str, default='womac4')
+    parser.add_argument('--load3d', action='store_true', dest='load3d', default=True)
+    parser.add_argument('--direction', type=str, default='a_b', help='a2b or b2a')
+    parser.add_argument('--flip', action='store_true', dest='flip', default=False, help='image flip left right')
+    parser.add_argument('--resize', type=int, default=0)
+    parser.add_argument('--cropsize', type=int, default=0)
+    parser.add_argument('--n01', action='store_true', dest='n01', default=False)
+    parser.add_argument('--trd', type=float, dest='trd', help='threshold of images', default=0)
+    parser.add_argument('--preload', action='store_true', help='preload the data once to cache')
+    parser.add_argument('--split', type=str, default=None)
+    parser.add_argument('--fold', type=int, default=None)
+
     return parser
 
-from dotenv import load_dotenv
-import argparse
-from loaders.data_multi import PairedData, PairedData3D
+parser = args_train()
+args = parser.parse_args()
+
 load_dotenv('env/.t09b')
 x = pd.read_csv('env/womac4_moaks.csv')
 labels = (x.loc[x['SIDE'] == 'RIGHT']['V$$WOMKP#']).values > (x.loc[x['SIDE'] == 'LEFT']['V$$WOMKP#']).values
 
-parser = args_train()
+
 # Model
+ckpt_path = '/media/ExtHDD01/logscls/'
 #ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/siamese/vgg19max2/*.pth'))[12-2]
 #ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/siamese/alexmax2/*.pth'))[10-2]
 #ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/alexmaxA/*.pth'))[9-2]
 #ckpt = sorted(glob.glob('/home/ghc/Dropbox/TheSource/scripts/OAI_classification/checkpoints/alexmaxA%/*.pth'))[7-2]
-ckpt = sorted(glob.glob('/media/ExtHDD01/logscls/siamese/vgg19max2/checkpoints/*.pth'))[12-2]
+
+#ckpt = sorted(glob.glob(ckpt_path + 'siamese/vgg11max2%test2/checkpoints/*.pth'))[14-2]
+ckpt = sorted(glob.glob(ckpt_path + 'siamese/vgg19max2/checkpoints/*.pth'))[12-2]
 net = torch.load(ckpt, map_location='cpu')
 net = net.cuda()
 net = net.eval()
 
 # Data
-from loaders.data_multi import MultiData as Dataset
-
-parser.add_argument('--dataset', type=str, default='womac4')
-parser.add_argument('--load3d', action='store_true', dest='load3d', default=True)
-parser.add_argument('--direction', type=str, default='a_b', help='a2b or b2a')
-parser.add_argument('--flip', action='store_true', dest='flip', default=False, help='image flip left right')
-parser.add_argument('--resize', type=int, default=0)
-parser.add_argument('--cropsize', type=int, default=0)
-parser.add_argument('--n01', action='store_true', dest='n01', default=False)
-parser.add_argument('--trd', type=float, dest='trd', help='threshold of images', default=0)
-parser.add_argument('--preload', action='store_true', help='preload the data once to cache')
-parser.add_argument('--split', type=str, default=None)
-parser.add_argument('--fold', type=int, default=None)
-
-args = parser.parse_args()
-
-eval_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/fullXXX/',
+eval_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/val/',
                    path='ap_bp', opt=args, labels=[(int(x),) for x in labels], mode='test', index=None)
 
 eval_loader = DataLoader(eval_set, batch_size=1, shuffle=False, num_workers=4, drop_last=False)
@@ -104,7 +108,7 @@ if 0:
         label = data['labels']
         a = a.repeat(1, 3, 1, 1, 1)
         b = b.repeat(1, 3, 1, 1, 1)
-        if label[0] == 1:
+        if label[0] == 2:
             imgs = (b.cuda(), a.cuda())
             out, (xB, xA) = net(imgs)
         else:
@@ -125,12 +129,9 @@ if 0:
         all_xA = all_xA.unsqueeze(2).unsqueeze(3)
         all_xB = all_xB.unsqueeze(2).unsqueeze(3)
 
-
-
-    loss_function = ClassificationLoss()
     # AUC from classifier
-
     print('AUC=  ' + str(metrics(all_label[:667], all_out[:667, :])[0]))
+    print('AUC=  ' + str(metrics(all_label[:667], flip_by_label(torch.from_numpy(all_out[:667, :]), all_label[:667]))[0]))
 
     # manual calculated classifier
     flip = ((torch.from_numpy(labels)) / 1 - 0.5) * 2
@@ -139,17 +140,33 @@ if 0:
     print('AUC=  ' + str(metrics(all_label[:667], out[:667, :])[0]))
 
     # By difference to average(No Pain)
-    all_xB_mean = torch.mean(all_xB[667:, ::], 0).unsqueeze(0).repeat(667 * 2, 1, 1, 1)
+    all_xB_mean = torch.min(all_xA[667:, ::], 0)[0].unsqueeze(0).repeat(667 * 2, 1, 1, 1)
     new_test = torch.cat([all_xA[:667, ::], all_xB[:667, ::]], 0)
     out = net.classifier((new_test - all_xB_mean).cuda()).detach().cpu()[:, :, 0, 0]
     print('AUC=  ' + str(metrics(np.array([0]*667 + [1] * 667), out)[0]))
 
+    # BY average to the difference
+    new_train = all_xB[667:, ::]
+    new_test = torch.cat([all_xA[:667, ::], all_xB[:667, ::]], 0)
 
-    # SVM
+    out_i = []
+    for i in tqdm(range(new_test.shape[0])):
+        out_ij = []
+        for j in range(new_train.shape[0]):
+            out = net.classifier(((new_train[j] - new_test[i])).unsqueeze(0).cuda()).detach().cpu()[:, :, 0, 0]
+            out_ij.append(out)
+        out_ij = torch.cat(out_ij, 0)
+        out_ij = torch.mean(out_ij, 0)
+        out_ij = nn.Softmax(dim=0)(out_ij)
+        out_i.append(out_ij.unsqueeze(0))
+    out_i = torch.cat(out_i, 0)
+    print('AUC=  ' + str(metrics(np.array([0]*667 + [1] * 667), out_i[::])[0]))
+
+    # Using SVM
     X_train = torch.cat([all_xA[667:,:,0,0], all_xB[667:,:,0,0]], 0).numpy()
     y_train = np.array([0]*1558 + [1] * 1558)
     X_test = torch.cat([all_xA[:667,:,0,0], all_xB[:667,:,0,0]], 0).numpy()
-    y_test =np.array([0]*667 + [1] * 667)
+    y_test = np.array([0]*667 + [1] * 667)
     # Create a SVM Classifier
     clf = svm.SVC(kernel='poly', probability=True)  # Linear Kernel
     # Train the model using the training sets
@@ -186,6 +203,7 @@ def list_to_tensor(ax, repeat=True):
     ax = ax / ax.max()
     return ax
 
+
 # diffusion data
 import matplotlib.pyplot as plt
 data_root = '/home/ghc/Dataset/paired_images/womac4/fullXXX/'
@@ -204,25 +222,21 @@ for i in tqdm(range(len(clist) // 23)):
     bx = list_to_tensor(bx).float()
     cx = list_to_tensor(cx).float()
 
-    #ax = ax[:, :, 64:-64, 64:-64, :]
-    #bx = bx[:, :, 64:-64, 64:-64, :]
-    #cx = cx[:, :, 64:-64, 64:-64, :]
-
-    if labels[i]:
+    if labels[i] == 1:
         imgs = (bx.cuda(), cx.cuda())
     else:
         imgs = (cx.cuda(), bx.cuda())
     out, (xB, xA) = net(imgs)
     out_cb.append(out.detach().cpu())
 
-    if labels[i]:
+    if labels[i] == 1:
         imgs = (bx.cuda(), ax.cuda())
     else:
         imgs = (ax.cuda(), bx.cuda())
     out, (xB, xA) = net(imgs)
     out_ab.append(out.detach().cpu())
 
-    if labels[i]:
+    if labels[i] == 1:
         imgs = (cx.cuda(), ax.cuda())
     else:
         imgs = (ax.cuda(), cx.cuda())
@@ -238,7 +252,17 @@ ab = nn.Softmax(dim=1)(out_ab)
 cb = nn.Softmax(dim=1)(out_cb)
 ac = nn.Softmax(dim=1)(out_ac)
 
-print('AUC=  ' + str(metrics(labels[:200], out_ab)[0]))
+def flip_by_label(x, label):
+    y = []
+    for i in range(x.shape[0]):
+        if label[i] == 1:
+            y.append(torch.flip(x[i, :], [0]))
+        else:
+            y.append(x[i, :])
+    return torch.stack(y, 0)
+
+
+print('AUC=  ' + str(metrics(labels[:200], ab)[0]))
 
 ab2 = np.array([ab[i, int(labels[i] / 1)] for i in range(200)])
 cb2 = np.array([cb[i, int(labels[i] / 1)] for i in range(200)])
@@ -247,7 +271,7 @@ ac2 = np.array([ac[i, int(labels[i] / 1)] for i in range(200)])
 
 # GAN data
 log_root = '/media/ExtHDD01/logs/womac4/'
-ckpt = 'global1_cut1/nce4_down4_0011_ngf32_proj32_zcrop16/checkpoints/net_g_model_epoch_200.pth' # 0.92
+ckpt = 'global1_cut1/nce4_down4_0011_ngf32_proj32_zcrop16/checkpoints/net_g_model_epoch_200.pth'
 net_gan = torch.load(log_root + ckpt, map_location='cpu').cuda()
 alpha = 1
 gpu = True
@@ -259,52 +283,66 @@ def get_xy(ax):
     mask = net_gan(ax, alpha=alpha)['out0'].detach().cpu()
     mask = nn.Sigmoid()(mask)
     ax = torch.multiply(mask, ax.detach().cpu())
-    return ax
+    return ax, mask
 
+
+def gather_prob(x, flip=False):
+    x = torch.cat(x, 0)
+    x = nn.Softmax(dim=1)(x)
+    if flip:
+        x = np.array([x[i, int(labels[i] / 1)] for i in range(200)])
+    else:
+        x = np.array([x[i, 0] for i in range(200)])
+    return x
+
+
+# AGAIN
 out_cb = []
 out_ab = []
 out_ac = []
+out_ac_mask = []
+
+all_cx = []
+all_mask = []
+all_ax = []
+all_bx = []
+
 for i in tqdm(range(len(clist) // 23)):
     ax = [tiff.imread(x) for x in alist[i * 23:(i + 1) * 23]]
     bx = [tiff.imread(x) for x in blist[i * 23:(i + 1) * 23]]
     ax = list_to_tensor(ax, repeat=True).float()
     bx = list_to_tensor(bx, repeat=True).float()
 
-    cx = get_xy(ax.permute(4, 1, 2, 3, 0)[:,:1,:,:,0]).permute(1, 2, 3, 0).unsqueeze(0).repeat(1, 3, 1, 1, 1)
+    cx, mask = get_xy(ax.permute(4, 1, 2, 3, 0)[:,:1,:,:,0])
+    cx = cx.permute(1, 2, 3, 0).unsqueeze(0).repeat(1, 3, 1, 1, 1)
+    mask = mask.permute(1, 2, 3, 0).unsqueeze(0).repeat(1, 3, 1, 1, 1)
+    cx_mask = torch.multiply(ax, mask)
+    all_ax.append(ax)
+    all_bx.append(bx)
+    all_cx.append(cx)
+    all_mask.append(mask)
 
-    #ax = ax[:, :, 64:-64, 64:-64, :]
-    #bx = bx[:, :, 64:-64, 64:-64, :]
-    #cx = cx[:, :, 64:-64, 64:-64, :]
-
-    if labels[i]:
-        imgs = (bx.cuda(), cx.cuda())
-    else:
-        imgs = (cx.cuda(), bx.cuda())
+    imgs = (cx.cuda(), bx.cuda())
     out, (xB, xA) = net(imgs)
     out_cb.append(out.detach().cpu())
 
-    if labels[i]:
-        imgs = (bx.cuda(), ax.cuda())
-    else:
-        imgs = (ax.cuda(), bx.cuda())
+    imgs = (ax.cuda(), bx.cuda())
     out, (xB, xA) = net(imgs)
     out_ab.append(out.detach().cpu())
 
-    if labels[i]:
-        imgs = (cx.cuda(), ax.cuda())
-    else:
-        imgs = (ax.cuda(), cx.cuda())
+    imgs = (ax.cuda(), cx.cuda())
     out, (xB, xA) = net(imgs)
     out_ac.append(out.detach().cpu())
 
-out_ab = torch.cat(out_ab, 0)
-out_cb = torch.cat(out_cb, 0)
-out_ac = torch.cat(out_ac, 0)
-ab = nn.Softmax(dim=1)(out_ab)
-cb = nn.Softmax(dim=1)(out_cb)
-ac = nn.Softmax(dim=1)(out_ac)
-ab3 = np.array([ab[i, int(labels[i] / 1)] for i in range(200)])
-cb3 = np.array([cb[i, int(labels[i] / 1)] for i in range(200)])
-ac3 = np.array([ac[i, int(labels[i] / 1)] for i in range(200)])
+    imgs = (ax.cuda(), cx_mask.cuda())
+    out, (xB, xA) = net(imgs)
+    out_ac_mask.append(out.detach().cpu())
 
-plt.scatter(ac2, ac3);plt.xlim(0,1);plt.ylim(0,1);plt.show()
+[ab3, cb3, ac3, ac3mask] = [gather_prob(x, flip=False) for x in (out_ab, out_cb, out_ac, out_ac_mask)]
+
+plt.scatter(ac2, ac3); plt.xlim(0,1); plt.ylim(0,1); plt.show()
+plt.scatter(ac3mask, ac3); plt.xlim(0,1); plt.ylim(0,1); plt.show()
+
+x = torch.cat(out_ab, 0)
+
+xx = out_ab.index_select(0, torch.LongTensor(labels[:200]))
